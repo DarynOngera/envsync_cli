@@ -5,13 +5,13 @@ defmodule EnvsyncCli.Auth do
   HTTP server to receive the JWT callback, then stores the token.
   """
 
-  alias EnvsyncCli.{Config, TokenStore, Http}
+  alias EnvsyncCli.{Config, TokenStore, Http, ProjectState}
 
   @timeout_ms 120_000
 
   def login do
-    port  = Config.callback_port()
-    url   = Config.login_url()
+    port = Config.callback_port()
+    url = Config.login_url()
 
     Owl.IO.puts([Owl.Data.tag("→ ", :cyan), "Opening browser for GitHub login..."])
     open_browser(url)
@@ -35,7 +35,8 @@ defmodule EnvsyncCli.Auth do
 
   def logout do
     TokenStore.delete()
-    Owl.IO.puts([Owl.Data.tag("✓ ", :green), "Logged out. Token cleared."])
+    ProjectState.clear()
+    Owl.IO.puts([Owl.Data.tag("✓ ", :green), "Logged out. Token and sync state cleared."])
     :ok
   end
 
@@ -43,7 +44,9 @@ defmodule EnvsyncCli.Auth do
     case TokenStore.get() do
       {:ok, token} ->
         case Http.get("/api/whoami") do
-          {:ok, _}              -> {:ok, token}
+          {:ok, _} ->
+            {:ok, token}
+
           {:error, :unauthorized} ->
             Owl.IO.puts([Owl.Data.tag("  Session expired. Re-authenticating...", :yellow)])
             TokenStore.delete()
@@ -61,9 +64,9 @@ defmodule EnvsyncCli.Auth do
   defp open_browser(url) do
     cmd =
       case :os.type() do
-        {:unix, :darwin}  -> "open"
-        {:unix, _}        -> "xdg-open"
-        {:win32, _}       -> "start"
+        {:unix, :darwin} -> "open"
+        {:unix, _} -> "xdg-open"
+        {:win32, _} -> "start"
       end
 
     System.cmd(cmd, [url], stderr_to_stdout: true)
@@ -84,8 +87,10 @@ defmodule EnvsyncCli.Auth do
     task = Task.async(fn -> accept_and_extract(listen_socket) end)
 
     case Task.yield(task, timeout) do
-      {:ok, result} -> result
-      nil           ->
+      {:ok, result} ->
+        result
+
+      nil ->
         Task.shutdown(task, :brutal_kill)
         {:error, :timeout}
     end
@@ -93,7 +98,7 @@ defmodule EnvsyncCli.Auth do
 
   defp accept_and_extract(listen_socket) do
     {:ok, socket} = :gen_tcp.accept(listen_socket)
-    request        = read_request(socket)
+    request = read_request(socket)
 
     send_callback_response(socket)
     :gen_tcp.close(socket)
@@ -142,11 +147,11 @@ defmodule EnvsyncCli.Auth do
   end
 
   defp extract_token_from_request(path) do
-    uri    = URI.parse(path)
+    uri = URI.parse(path)
     params = URI.decode_query(uri.query || "")
 
     case Map.get(params, "token") do
-      nil   -> {:error, :no_token_in_callback}
+      nil -> {:error, :no_token_in_callback}
       token -> {:ok, token}
     end
   end
