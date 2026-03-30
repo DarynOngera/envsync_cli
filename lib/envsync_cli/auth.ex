@@ -59,7 +59,7 @@ defmodule EnvsyncCli.Auth do
     end
   end
 
-  # ── Private ───────────────────────────────────────────────────────────────
+  #  Private 
 
   defp open_browser(url) do
     cmd =
@@ -129,7 +129,7 @@ defmodule EnvsyncCli.Auth do
   defp send_callback_response(socket) do
     body = """
     <html><body>
-    <h2>EnvSync — Authentication successful</h2>
+    <h2>EnvSync - Authentication successful</h2>
     <p>You can close this window and return to your terminal.</p>
     </body></html>
     """

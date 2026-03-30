@@ -92,7 +92,10 @@ defmodule EnvsyncCli.EnvFile do
     overwrite? = Keyword.get(opts, :overwrite, false)
 
     with {:ok, existing_content} <- read_existing_content(path) do
-      existing_lines = lines_from_content(existing_content)
+      existing_lines =
+        existing_content
+        |> lines_from_content()
+        |> Enum.reject(&blank_line?/1)
 
       {updated_lines, added_keys, updated_keys} =
         Enum.reduce(secrets, {existing_lines, [], []}, fn {key, value}, {lines, added, updated} ->
@@ -137,6 +140,7 @@ defmodule EnvsyncCli.EnvFile do
   defp comment_or_blank?(""), do: true
   defp comment_or_blank?("#" <> _rest), do: true
   defp comment_or_blank?(_), do: false
+  defp blank_line?(line), do: String.trim(line) == ""
 
   defp extract_key(line) do
     case String.split(line, "=", parts: 2) do

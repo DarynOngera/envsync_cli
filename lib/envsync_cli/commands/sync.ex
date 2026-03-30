@@ -71,9 +71,11 @@ defmodule EnvsyncCli.Commands.Sync do
   end
 
   defp sync_once(project, template_keys, local_env, env_path, retry?: retry?) do
+    force_pull? = should_force_pull?(template_keys, local_env)
+
     with {:ok, _} <- Auth.ensure_authenticated(),
          {:ok, publish_result} <- maybe_publish_local_env(project, template_keys, local_env),
-         {:ok, body} <- fetch_secrets(project, template_keys),
+         {:ok, body} <- fetch_secrets(project, template_keys, force_pull?),
          {:ok, merge_result} <- apply_sync_payload(body, env_path),
          :ok <- persist_project_version(project, body["server_version"]) do
       print_sync_result(publish_result, merge_result, body["missing"] || [], body, env_path)
@@ -97,8 +99,35 @@ defmodule EnvsyncCli.Commands.Sync do
     end
   end
 
-  defp fetch_secrets(project, requested_keys) do
-    payload = build_sync_payload(project, requested_keys, include_client_version?: true)
+  @doc false
+  def should_force_pull?(template_keys, local_env) do
+    template_keys
+    |> EnvFile.missing_keys(local_env)
+    |> Enum.any?()
+  end
+
+  @doc false
+  def build_sync_payload(project, requested_keys, opts) do
+    include_client_version? = Keyword.get(opts, :include_client_version?, true)
+
+    client_version =
+      if include_client_version?, do: ProjectState.get_version(project), else: :skip
+
+    base_payload = %{
+      project: project,
+      requested_keys: requested_keys,
+      cli_version: Config.cli_version()
+    }
+
+    case client_version do
+      {:ok, version} -> Map.put(base_payload, :client_version, version)
+      _ -> base_payload
+    end
+  end
+
+  defp fetch_secrets(project, requested_keys, force_pull?) do
+    payload =
+      build_sync_payload(project, requested_keys, include_client_version?: not force_pull?)
 
     Owl.IO.puts([
       Owl.Data.tag("→ ", :cyan),
@@ -115,28 +144,6 @@ defmodule EnvsyncCli.Commands.Sync do
   defp fetch_backend_snapshot(project, requested_keys) do
     payload = build_sync_payload(project, requested_keys, include_client_version?: false)
     Http.post("/api/sync", payload)
-  end
-
-  defp build_sync_payload(project, requested_keys, opts) do
-    payload = %{
-      project: project,
-      requested_keys: requested_keys,
-      cli_version: Config.cli_version()
-    }
-
-    if Keyword.get(opts, :include_client_version?, true) do
-      maybe_put_client_version(payload, project)
-    else
-      payload
-    end
-  end
-
-  defp maybe_put_client_version(payload, project) do
-    case ProjectState.get_version(project) do
-      {:ok, version} -> Map.put(payload, :client_version, version)
-      :not_found -> payload
-      {:error, _reason} -> payload
-    end
   end
 
   defp maybe_publish_local_env(project, template_keys, local_env) do
