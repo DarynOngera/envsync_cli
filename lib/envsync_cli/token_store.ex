@@ -7,19 +7,19 @@ defmodule EnvsyncCli.TokenStore do
 
   alias EnvsyncCli.Config
 
-  @fallback_dir  Path.expand("~/.config/envsync")
+  @fallback_dir Path.expand("~/.config/envsync")
   @fallback_file Path.join(@fallback_dir, "token")
 
   def get do
     case keychain_get() do
       {:ok, token} -> {:ok, token}
-      {:error, _}  -> file_get()
+      {:error, _} -> file_get()
     end
   end
 
   def put(token) do
     case keychain_put(token) do
-      :ok         -> :ok
+      :ok -> :ok
       {:error, _} -> file_put(token)
     end
   end
@@ -30,12 +30,13 @@ defmodule EnvsyncCli.TokenStore do
     :ok
   end
 
-  #  Keychain 
+  # Keychain
 
   defp keychain_get do
     try do
-      case Keyring.get(Config.keyring_service(), Config.keyring_token_key()) do
+      case safe_keyring_call(:get, [Config.keyring_service(), Config.keyring_token_key()]) do
         nil -> {:error, :not_found}
+        {:error, _} = error -> error
         token -> {:ok, token}
       end
     rescue
@@ -47,8 +48,10 @@ defmodule EnvsyncCli.TokenStore do
 
   defp keychain_put(token) do
     try do
-      Keyring.set(Config.keyring_service(), Config.keyring_token_key(), token)
-      :ok
+      case safe_keyring_call(:set, [Config.keyring_service(), Config.keyring_token_key(), token]) do
+        {:error, _} = error -> error
+        _ -> :ok
+      end
     rescue
       _ -> {:error, :keychain_unavailable}
     catch
@@ -58,7 +61,8 @@ defmodule EnvsyncCli.TokenStore do
 
   defp keychain_delete do
     try do
-      Keyring.delete(Config.keyring_service(), Config.keyring_token_key())
+      _ = safe_keyring_call(:delete, [Config.keyring_service(), Config.keyring_token_key()])
+      :ok
     rescue
       _ -> :ok
     catch
@@ -66,12 +70,22 @@ defmodule EnvsyncCli.TokenStore do
     end
   end
 
-  #  File fallback
+  defp safe_keyring_call(function_name, args) do
+    arity = length(args)
+
+    if function_exported?(Keyring, function_name, arity) do
+      apply(Keyring, function_name, args)
+    else
+      {:error, :keychain_unavailable}
+    end
+  end
+
+  # File fallback
 
   defp file_get do
     case File.read(@fallback_file) do
       {:ok, token} -> {:ok, String.trim(token)}
-      {:error, _}  -> {:error, :not_found}
+      {:error, _} -> {:error, :not_found}
     end
   end
 
