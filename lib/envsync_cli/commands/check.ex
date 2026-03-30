@@ -3,13 +3,13 @@ defmodule EnvsyncCli.Commands.Check do
 
   def run(_args, opts) do
     template_path = Keyword.get(opts, :template, ".env.example")
-    env_path      = Keyword.get(opts, :env,      ".env")
+    env_path = Keyword.get(opts, :env, ".env")
 
     with {:ok, template_keys} <- EnvFile.read_template(template_path),
-         {:ok, local_env}     <- EnvFile.read_local(env_path) do
+         {:ok, local_env} <- EnvFile.read_local(env_path) do
       missing = EnvFile.missing_keys(template_keys, local_env)
 
-      total   = length(template_keys)
+      total = length(template_keys)
       present = total - length(missing)
 
       Owl.IO.puts("\n")
