@@ -44,8 +44,14 @@ defmodule EnvsyncCli.EnvFile do
           |> Enum.reject(&comment_or_blank?/1)
           |> Enum.reduce(%{}, fn line, acc ->
             case String.split(line, "=", parts: 2) do
-              [key, value] -> Map.put(acc, String.trim(key), String.trim(value))
-              _            -> acc
+              [key, value] ->
+                case normalize_key(key) do
+                  "" -> acc
+                  normalized_key -> Map.put(acc, normalized_key, String.trim(value))
+                end
+
+              _ ->
+                acc
             end
           end)
 
@@ -67,64 +73,108 @@ defmodule EnvsyncCli.EnvFile do
     Enum.filter(template_keys, fn key ->
       case Map.get(local_env, key) do
         nil -> true
-        ""  -> true
-        _   -> false
+        "" -> true
+        _ -> false
       end
     end)
   end
 
   @doc """
   Merges fetched secrets into the local .env file.
-  Only writes keys that are in the secrets map.
-  Never overwrites keys that already have values.
-  Creates the file if it does not exist.
-  Sets file permissions to 0600.
+
+  Options:
+  - `overwrite: true` updates existing key values (used for rotated secrets)
+  - `overwrite: false` keeps existing values and only appends missing keys
+
+  Returns `{:ok, %{added: [...], updated: [...]}}`.
   """
-  def merge(secrets, path \\ ".env") do
-    {:ok, existing} = read_local(path)
+  def merge(secrets, path \\ ".env", opts \\ []) when is_map(secrets) do
+    overwrite? = Keyword.get(opts, :overwrite, false)
 
-    new_entries =
-      secrets
-      |> Enum.reject(fn {key, _value} -> Map.has_key?(existing, key) end)
-      |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
-      |> Enum.join("\n")
+    with {:ok, existing_content} <- read_existing_content(path) do
+      existing_lines = lines_from_content(existing_content)
 
-    existing_content = if File.exists?(path), do: File.read!(path), else: ""
+      {updated_lines, added_keys, updated_keys} =
+        Enum.reduce(secrets, {existing_lines, [], []}, fn {key, value}, {lines, added, updated} ->
+          key_regex = ~r/^\s*#{Regex.escape(key)}\s*=/
+          replacement = "#{key}=#{value}"
 
-    updated =
-      case {String.ends_with?(existing_content, "\n"), new_entries} do
-        {_, ""}      -> existing_content
-        {true,  _}   -> existing_content <> new_entries <> "\n"
-        {false, _}   ->
-          separator = if existing_content == "", do: "", else: "\n"
-          existing_content <> separator <> new_entries <> "\n"
-      end
+          case Enum.find_index(lines, &Regex.match?(key_regex, &1)) do
+            nil ->
+              {lines ++ [replacement], [key | added], updated}
 
-    File.write!(path, updated)
-    File.chmod!(path, 0o600)
+            idx ->
+              current = Enum.at(lines, idx)
 
-    written_keys = Enum.map(new_entries |> String.split("\n"), fn line ->
-      case String.split(line, "=", parts: 2) do
-        [key, _] -> key
-        _        -> nil
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reject(&(&1 == ""))
+              cond do
+                overwrite? and current != replacement ->
+                  {List.replace_at(lines, idx, replacement), added, [key | updated]}
 
-    {:ok, written_keys}
+                true ->
+                  {lines, added, updated}
+              end
+          end
+        end)
+
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, content_from_lines(updated_lines))
+      File.chmod!(path, 0o600)
+
+      {:ok, %{added: Enum.reverse(added_keys), updated: Enum.reverse(updated_keys)}}
+    end
   end
 
-  # ── Private ───────────────────────────────────────────────────────────────
+  # Private
 
-  defp comment_or_blank?(""),           do: true
+  defp read_existing_content(path) do
+    case File.read(path) do
+      {:ok, content} -> {:ok, content}
+      {:error, :enoent} -> {:ok, ""}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp comment_or_blank?(""), do: true
   defp comment_or_blank?("#" <> _rest), do: true
-  defp comment_or_blank?(_),            do: false
+  defp comment_or_blank?(_), do: false
 
   defp extract_key(line) do
     case String.split(line, "=", parts: 2) do
-      [key | _] -> String.trim(key)
-      _         -> nil
+      [key | _] ->
+        case normalize_key(key) do
+          "" -> nil
+          normalized_key -> normalized_key
+        end
+
+      _ ->
+        nil
     end
   end
+
+  defp normalize_key(key) do
+    key
+    |> String.trim()
+    |> String.replace(~r/^export\s+/, "")
+    |> String.trim()
+  end
+
+  defp lines_from_content(""), do: []
+
+  defp lines_from_content(content) do
+    content
+    |> String.split("\n", trim: false)
+    |> drop_trailing_empty_line()
+  end
+
+  defp drop_trailing_empty_line([]), do: []
+
+  defp drop_trailing_empty_line(lines) do
+    case List.last(lines) do
+      "" -> List.delete_at(lines, -1)
+      _ -> lines
+    end
+  end
+
+  defp content_from_lines([]), do: ""
+  defp content_from_lines(lines), do: Enum.join(lines, "\n") <> "\n"
 end
