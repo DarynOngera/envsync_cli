@@ -11,6 +11,8 @@ defmodule EnvsyncCli.CLI do
       OptionParser.parse(argv,
         strict: [
           project: :string,
+          name: :string,
+          repo: :string,
           template: :string,
           env: :string,
           interval: :integer,
@@ -40,7 +42,7 @@ defmodule EnvsyncCli.CLI do
 
   defp route(["auth" | rest], opts), do: Commands.Auth.run(rest, opts)
   defp route(["whoami" | _], opts), do: Commands.Whoami.run([], opts)
-  defp route(["projects" | _], opts), do: Commands.Projects.run([], opts)
+  defp route(["projects" | rest], opts), do: Commands.Projects.run(rest, opts)
   defp route(["check" | _], opts), do: Commands.Check.run([], opts)
   defp route(["sync" | _], opts), do: Commands.Sync.run([], opts)
   defp route(["watch" | _], opts), do: Commands.Watch.run([], opts)
@@ -69,6 +71,8 @@ defmodule EnvsyncCli.CLI do
       auth logout                         Clear stored session token
       whoami                              Show current authenticated identity
       projects                            List projects you have access to
+      projects create --name <name> --repo <owner/repo> [--description <text>]
+      projects reverify --project <name>  Re-verify project repo binding (admin)
       check                               Diff .env.example against local .env
       sync --project <name>               Publish local .env changes (admin) then sync
       watch --project <name>              Poll backend and auto-sync repeatedly
@@ -83,6 +87,8 @@ defmodule EnvsyncCli.CLI do
 
     OPTIONS
       --project, -p         Project name
+      --name                Project name for creation
+      --repo                GitHub repo owner/name for project binding
       --template            Path to .env.example  (default: .env.example)
       --env                 Path to .env          (default: .env)
       --interval, -i        Watch poll interval seconds (default: 30)
@@ -96,6 +102,7 @@ defmodule EnvsyncCli.CLI do
 
     EXAMPLES
       envsync sync --project my_app
+      envsync projects create --name my_app --repo myorg/my_app
       envsync watch --project my_app --interval 20
       envsync admin members list --project my_app
       envsync admin secrets set --project my_app --key API_KEY --value secret123

@@ -53,6 +53,18 @@ defmodule EnvsyncCli.Http do
     do: {:error, {:bad_request, body}}
 
   defp handle_response({:ok, %Req.Response{status: 401}}), do: {:error, :unauthorized}
+
+  defp handle_response(
+         {:ok, %Req.Response{status: 403, body: %{"error" => "repo_mismatch"} = body}}
+       ),
+       do: {:error, {:repo_mismatch, body}}
+
+  defp handle_response(
+         {:ok,
+          %Req.Response{status: 403, body: %{"error" => "project_repo_not_configured"} = body}}
+       ),
+       do: {:error, {:project_repo_not_configured, body}}
+
   defp handle_response({:ok, %Req.Response{status: 403}}), do: {:error, :forbidden}
   defp handle_response({:ok, %Req.Response{status: 404}}), do: {:error, :not_found}
 

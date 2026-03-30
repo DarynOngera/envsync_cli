@@ -1,5 +1,5 @@
 defmodule EnvsyncCli.Commands.Sync do
-  alias EnvsyncCli.{Auth, Http, EnvFile, ProjectState, Config}
+  alias EnvsyncCli.{Auth, Http, EnvFile, ProjectState, Config, RepoIdentity}
 
   def run(args, opts) do
     project = extract_project(args, opts)
@@ -18,7 +18,8 @@ defmodule EnvsyncCli.Commands.Sync do
     with {:ok, template_keys} <- EnvFile.read_template(template_path),
          :ok <- ensure_non_empty_template(template_keys),
          {:ok, local_env} <- read_local_env(env_path),
-         :ok <- sync_once(project, template_keys, local_env, env_path, retry?: true) do
+         {:ok, local_repo} <- resolve_local_repo(),
+         :ok <- sync_once(project, local_repo, template_keys, local_env, env_path, retry?: true) do
       :ok
     else
       {:error, :template_not_found} ->
@@ -38,6 +39,21 @@ defmodule EnvsyncCli.Commands.Sync do
 
       {:error, {:local_env_read, reason}} ->
         Owl.IO.puts([Owl.Data.tag("✗ ", :red), "Could not read #{env_path}: #{inspect(reason)}"])
+
+      {:error, :git_not_available} ->
+        Owl.IO.puts([Owl.Data.tag("✗ ", :red), "`git` is not available on this machine."])
+
+      {:error, :git_remote_not_found} ->
+        Owl.IO.puts([
+          Owl.Data.tag("✗ ", :red),
+          "Could not resolve `origin` remote. Run sync inside a GitHub repo with origin configured."
+        ])
+
+      {:error, :invalid_repo} ->
+        Owl.IO.puts([
+          Owl.Data.tag("✗ ", :red),
+          "Could not derive a valid GitHub owner/repo from local git remote."
+        ])
 
       {:error, {:partial_publish_forbidden, pushed_count}} ->
         Owl.IO.puts([
@@ -70,12 +86,17 @@ defmodule EnvsyncCli.Commands.Sync do
     end
   end
 
-  defp sync_once(project, template_keys, local_env, env_path, retry?: retry?) do
+  defp resolve_local_repo do
+    RepoIdentity.resolve_local_repo()
+  end
+
+  defp sync_once(project, local_repo, template_keys, local_env, env_path, retry?: retry?) do
     force_pull? = should_force_pull?(template_keys, local_env)
 
     with {:ok, _} <- Auth.ensure_authenticated(),
-         {:ok, publish_result} <- maybe_publish_local_env(project, template_keys, local_env),
-         {:ok, body} <- fetch_secrets(project, template_keys, force_pull?),
+         {:ok, publish_result} <-
+           maybe_publish_local_env(project, local_repo, template_keys, local_env),
+         {:ok, body} <- fetch_secrets(project, local_repo, template_keys, force_pull?),
          {:ok, merge_result} <- apply_sync_payload(body, env_path),
          :ok <- persist_project_version(project, body["server_version"]) do
       print_sync_result(publish_result, merge_result, body["missing"] || [], body, env_path)
@@ -87,12 +108,32 @@ defmodule EnvsyncCli.Commands.Sync do
         ])
 
         with {:ok, _token} <- Auth.login() do
-          sync_once(project, template_keys, local_env, env_path, retry?: false)
+          sync_once(project, local_repo, template_keys, local_env, env_path, retry?: false)
         end
 
       {:error, :unauthorized} ->
         Owl.IO.puts([Owl.Data.tag("✗ ", :red), "Session expired. Run: envsync auth login"])
         {:error, :unauthorized}
+
+      {:error, {:repo_mismatch, body}} ->
+        expected = body["expected_repo"] || "unknown"
+
+        Owl.IO.puts([
+          Owl.Data.tag("✗ ", :red),
+          "Local repository does not match project binding. Expected ",
+          Owl.Data.tag(expected, :cyan),
+          "."
+        ])
+
+        {:error, :repo_mismatch}
+
+      {:error, {:project_repo_not_configured, _body}} ->
+        Owl.IO.puts([
+          Owl.Data.tag("✗ ", :red),
+          "Project has no repo binding configured on backend. Ask a project admin to re-verify."
+        ])
+
+        {:error, :project_repo_not_configured}
 
       other ->
         other
@@ -107,7 +148,7 @@ defmodule EnvsyncCli.Commands.Sync do
   end
 
   @doc false
-  def build_sync_payload(project, requested_keys, opts) do
+  def build_sync_payload(project, local_repo, requested_keys, opts) do
     include_client_version? = Keyword.get(opts, :include_client_version?, true)
 
     client_version =
@@ -115,6 +156,7 @@ defmodule EnvsyncCli.Commands.Sync do
 
     base_payload = %{
       project: project,
+      repo: local_repo,
       requested_keys: requested_keys,
       cli_version: Config.cli_version()
     }
@@ -125,9 +167,11 @@ defmodule EnvsyncCli.Commands.Sync do
     end
   end
 
-  defp fetch_secrets(project, requested_keys, force_pull?) do
+  defp fetch_secrets(project, local_repo, requested_keys, force_pull?) do
     payload =
-      build_sync_payload(project, requested_keys, include_client_version?: not force_pull?)
+      build_sync_payload(project, local_repo, requested_keys,
+        include_client_version?: not force_pull?
+      )
 
     Owl.IO.puts([
       Owl.Data.tag("→ ", :cyan),
@@ -141,19 +185,21 @@ defmodule EnvsyncCli.Commands.Sync do
     Http.post("/api/sync", payload)
   end
 
-  defp fetch_backend_snapshot(project, requested_keys) do
-    payload = build_sync_payload(project, requested_keys, include_client_version?: false)
+  defp fetch_backend_snapshot(project, local_repo, requested_keys) do
+    payload =
+      build_sync_payload(project, local_repo, requested_keys, include_client_version?: false)
+
     Http.post("/api/sync", payload)
   end
 
-  defp maybe_publish_local_env(project, template_keys, local_env) do
+  defp maybe_publish_local_env(project, local_repo, template_keys, local_env) do
     local_template_values = extract_local_template_values(local_env, template_keys)
     local_count = map_size(local_template_values)
 
     if local_count == 0 do
       {:ok, %{local_keys: 0, changed_keys: 0, pushed_keys: 0, skipped_forbidden: false}}
     else
-      with {:ok, snapshot} <- fetch_backend_snapshot(project, template_keys) do
+      with {:ok, snapshot} <- fetch_backend_snapshot(project, local_repo, template_keys) do
         backend_secrets = snapshot["secrets"] || %{}
         changed_values = changed_local_values(local_template_values, backend_secrets)
         changed_count = map_size(changed_values)
