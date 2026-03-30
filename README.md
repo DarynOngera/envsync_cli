@@ -67,6 +67,8 @@ Logout clears both auth token and local project sync version state.
 | `envsync auth logout` | Clear local session token + sync state |
 | `envsync whoami` | Show authenticated identity |
 | `envsync projects` | List accessible projects |
+| `envsync projects create --name <name> --repo <owner/repo> [--description <text>]` | Create project and bind verified GitHub repo |
+| `envsync projects reverify --project <name>` | Re-verify project repo binding (admin) |
 | `envsync check` | Compare `.env.example` vs `.env` |
 | `envsync sync --project <name>` | Publish local `.env` changes if admin, then sync from backend |
 | `envsync watch --project <name> [--interval N]` | Poll backend and auto-sync repeatedly |
@@ -88,6 +90,17 @@ Sync once:
 ```bash
 envsync sync --project my_app
 ```
+
+Project onboarding:
+
+```bash
+envsync projects create --name my_app --repo myorg/my_app
+envsync projects reverify --project my_app
+```
+
+Project create/reverify is strictly verified by backend GitHub API checks.
+Backend must run with `ENVSYNC_GITHUB_VERIFY_TOKEN` configured.
+Accepted repo formats: `owner/repo`, `https://github.com/owner/repo(.git)`, `git@github.com:owner/repo.git`.
 
 Admin workflow (bulk publish):
 
