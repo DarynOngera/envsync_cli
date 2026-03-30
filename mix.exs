@@ -3,13 +3,13 @@ defmodule EnvsyncCli.MixProject do
 
   def project do
     [
-      app:             :envsync_cli,
-      version:         "0.1.0",
-      elixir:          "~> 1.16",
+      app: :envsync_cli,
+      version: "0.1.0",
+      elixir: "~> 1.16",
       start_permanent: Mix.env() == :prod,
-      escript:         escript(),
-      deps:            deps(),
-      aliases:         aliases()
+      escript: escript(),
+      deps: deps(),
+      aliases: aliases()
     ]
   end
 
@@ -23,21 +23,21 @@ defmodule EnvsyncCli.MixProject do
   defp escript do
     [
       main_module: EnvsyncCli.CLI,
-      name:        "envsync",
-      comment:     "EnvSync — environment secret synchronisation tool"
+      name: "envsync",
+      comment: "EnvSync — environment secret synchronisation tool"
     ]
   end
 
   defp deps do
     [
       # HTTP client
-      {:req,    "~> 0.5"},
+      {:req, "~> 0.5"},
       # JSON
-      {:jason,  "~> 1.4"},
+      {:jason, "~> 1.4"},
       # OS keychain access
       {:keyring, "~> 0.1"},
       # CLI argument parsing (built-in, but owl for pretty output)
-      {:owl,    "~> 0.12"}
+      {:owl, "~> 0.12"}
     ]
   end
 
