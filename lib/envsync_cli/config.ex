@@ -40,13 +40,22 @@ defmodule EnvsyncCli.Config do
   def keyring_token_key, do: @keyring_token_key
   def cli_version, do: @cli_version
 
-  def login_url do
-    "#{backend_url()}/auth/github"
+  def login_url(provider \\ "github") do
+    "#{backend_url()}/auth/#{normalize_provider(provider)}"
   end
 
   def api_url(path) do
     "#{backend_url()}#{path}"
   end
+
+  defp normalize_provider(provider) when is_binary(provider) do
+    case String.downcase(String.trim(provider)) do
+      "bitbucket" -> "bitbucket"
+      _ -> "github"
+    end
+  end
+
+  defp normalize_provider(_), do: "github"
 
   defp parse_positive_int(value, fallback) do
     case Integer.parse(value) do

@@ -23,9 +23,13 @@ defmodule EnvsyncCli.Commands.Projects do
 
         Enum.each(projects, fn p ->
           repo_suffix =
-            case p["repo_full_name"] do
-              nil -> ""
-              repo -> "  repo=#{repo}"
+            case {p["repo_provider"], p["repo_host"], p["repo_full_name"]} do
+              {provider, host, repo}
+              when is_binary(provider) and is_binary(host) and is_binary(repo) ->
+                "  repo=#{provider}://#{host}/#{repo}"
+
+              _ ->
+                ""
             end
 
           Owl.IO.puts([
@@ -49,20 +53,23 @@ defmodule EnvsyncCli.Commands.Projects do
     with {:ok, _} <- Auth.ensure_authenticated(),
          {:ok, name} <- require_opt(opts, :name, "--name"),
          {:ok, repo} <- require_opt(opts, :repo, "--repo"),
+         provider <- normalize_provider(Keyword.get(opts, :provider, "github")),
          {:ok, body} <-
            Http.post("/api/projects", %{
              name: name,
+             provider: provider,
              repo: repo,
              description: normalize_optional(Keyword.get(opts, :description))
            }) do
       project = body["project"] || %{}
+      repo_label = repo_display(project)
 
       Owl.IO.puts([
         Owl.Data.tag("✓ ", :green),
         "Project created: ",
         Owl.Data.tag(project["name"] || name, :cyan),
         "  repo=",
-        project["repo_full_name"] || repo
+        repo_label
       ])
     else
       {:error, :missing_option} ->
@@ -87,13 +94,14 @@ defmodule EnvsyncCli.Commands.Projects do
          {:ok, project} <- require_opt(opts, :project, "--project"),
          {:ok, body} <- Http.post("/api/projects/#{uri(project)}/reverify", %{}) do
       payload = body["project"] || %{}
+      repo_label = repo_display(payload)
 
       Owl.IO.puts([
         Owl.Data.tag("✓ ", :green),
         "Project repo re-verified: ",
         Owl.Data.tag(payload["name"] || project, :cyan),
         "  repo=",
-        payload["repo_full_name"] || "unknown"
+        repo_label
       ])
     else
       {:error, :missing_option} ->
@@ -133,9 +141,30 @@ defmodule EnvsyncCli.Commands.Projects do
   defp normalize_optional(value), do: value
   defp uri(value), do: URI.encode(to_string(value))
 
+  defp normalize_provider(provider) when is_binary(provider) do
+    case String.downcase(String.trim(provider)) do
+      "bitbucket" -> "bitbucket"
+      _ -> "github"
+    end
+  end
+
+  defp normalize_provider(_), do: "github"
+
+  defp repo_display(%{
+         "repo_provider" => provider,
+         "repo_host" => host,
+         "repo_full_name" => full_name
+       })
+       when is_binary(provider) and is_binary(host) and is_binary(full_name) do
+    "#{provider}://#{host}/#{full_name}"
+  end
+
+  defp repo_display(%{"repo_full_name" => full_name}) when is_binary(full_name), do: full_name
+  defp repo_display(_payload), do: "unknown"
+
   defp print_validation_error(
          %{
-           "error" => "repo must be a valid GitHub repository reference"
+           "error" => "repo must be a valid repository reference for the selected provider"
          } = body
        ) do
     Owl.IO.puts([Owl.Data.tag("✗ ", :red), validation_message(body)])
@@ -150,9 +179,12 @@ defmodule EnvsyncCli.Commands.Projects do
   end
 
   @doc false
-  def validation_message(%{"error" => "repo must be a valid GitHub repository reference"}) do
-    "repo must be a valid GitHub repository reference. Use one of: owner/repo, " <>
-      "https://github.com/owner/repo(.git), or git@github.com:owner/repo.git"
+  def validation_message(%{
+        "error" => "repo must be a valid repository reference for the selected provider"
+      }) do
+    "repo must be a valid repository reference. Examples: owner/repo, " <>
+      "https://github.com/owner/repo(.git), git@github.com:owner/repo.git, " <>
+      "https://bitbucket.org/workspace/repo(.git), git@bitbucket.org:workspace/repo.git"
   end
 
   def validation_message(%{
@@ -161,7 +193,7 @@ defmodule EnvsyncCli.Commands.Projects do
       }) do
     case reason do
       "missing_token" ->
-        "backend missing ENVSYNC_GITHUB_VERIFY_TOKEN (set it and restart backend)"
+        "backend missing repository verify token for this provider/host (set env and restart backend)"
 
       "unauthorized" ->
         "verify token lacks access to this repo"
@@ -170,7 +202,13 @@ defmodule EnvsyncCli.Commands.Projects do
         "repo not found or verify token cannot see it"
 
       "unreachable" ->
-        "cannot reach GitHub API from backend"
+        "cannot reach provider API from backend"
+
+      "unknown_host_profile" ->
+        "backend has no Bitbucket host profile for this host"
+
+      "missing_token_profile" ->
+        "backend Bitbucket host profile is missing token_env configuration"
 
       _ ->
         "repo verification failed (reason: #{reason})"
@@ -187,7 +225,7 @@ defmodule EnvsyncCli.Commands.Projects do
     Projects commands:
       envsync projects
       envsync projects list
-      envsync projects create --name <project-name> --repo <owner/repo> [--description <text>]
+      envsync projects create --name <project-name> --repo <repo-ref> [--provider github|bitbucket] [--description <text>]
       envsync projects reverify --project <project-name>
 
     """)

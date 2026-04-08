@@ -1,6 +1,6 @@
 defmodule EnvsyncCli.Auth do
   @moduledoc """
-  Manages the GitHub OAuth login flow.
+  Manages provider OAuth login flow.
   Opens a browser to the backend login URL, spins up a temporary local
   HTTP server to receive the JWT callback, then stores the token.
   """
@@ -9,11 +9,18 @@ defmodule EnvsyncCli.Auth do
 
   @timeout_ms 120_000
 
-  def login do
+  def login(provider \\ "github") do
+    provider = normalize_provider(provider)
     port = Config.callback_port()
-    url = Config.login_url()
+    url = Config.login_url(provider)
 
-    Owl.IO.puts([Owl.Data.tag("→ ", :cyan), "Opening browser for GitHub login..."])
+    Owl.IO.puts([
+      Owl.Data.tag("→ ", :cyan),
+      "Opening browser for ",
+      String.capitalize(provider),
+      " login..."
+    ])
+
     open_browser(url)
     Owl.IO.puts([Owl.Data.tag("  Waiting for callback on port #{port}...", :light_black)])
 
@@ -155,4 +162,13 @@ defmodule EnvsyncCli.Auth do
       token -> {:ok, token}
     end
   end
+
+  defp normalize_provider(provider) when is_binary(provider) do
+    case String.downcase(String.trim(provider)) do
+      "bitbucket" -> "bitbucket"
+      _ -> "github"
+    end
+  end
+
+  defp normalize_provider(_), do: "github"
 end

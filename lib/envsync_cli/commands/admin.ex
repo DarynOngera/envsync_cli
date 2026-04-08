@@ -57,11 +57,12 @@ defmodule EnvsyncCli.Commands.Admin do
   defp members_add(opts) do
     with {:ok, _} <- Auth.ensure_authenticated(),
          {:ok, project} <- require_opt(opts, :project, "--project"),
-         {:ok, github_login} <- require_opt(opts, :github_login, "--github-login"),
+         {:ok, identity} <- require_member_identity(opts),
          role <- Keyword.get(opts, :role, "member"),
          {:ok, body} <-
            Http.post("/api/projects/#{uri(project)}/members", %{
-             github_login: github_login,
+             provider: identity.provider,
+             login: identity.login,
              role: role
            }) do
       member = body["member"] || %{}
@@ -188,9 +189,11 @@ defmodule EnvsyncCli.Commands.Admin do
 
     Owl.IO.puts([
       "  ",
-      Owl.Data.tag(dev["github_login"] || "unknown", :cyan),
+      Owl.Data.tag(dev["provider_login"] || dev["github_login"] || "unknown", :cyan),
       "  role=",
       member["role"] || "member",
+      "  provider=",
+      dev["auth_provider"] || "github",
       "  active=",
       to_string(dev["active"]),
       "  id=",
@@ -210,9 +213,11 @@ defmodule EnvsyncCli.Commands.Admin do
 
     Owl.IO.puts([
       "  ",
-      Owl.Data.tag(member["github_login"] || "unknown", :cyan),
+      Owl.Data.tag(member["provider_login"] || member["github_login"] || "unknown", :cyan),
       "  status=",
       status_tag,
+      "  provider=",
+      member["auth_provider"] || "github",
       "  last_synced_version=",
       to_string(member["last_synced_version"] || 0),
       "  role=",
@@ -232,6 +237,28 @@ defmodule EnvsyncCli.Commands.Admin do
 
       value ->
         {:ok, value}
+    end
+  end
+
+  defp require_member_identity(opts) do
+    provider = Keyword.get(opts, :provider)
+    login = Keyword.get(opts, :login)
+    github_login = Keyword.get(opts, :github_login)
+
+    cond do
+      is_binary(provider) and provider != "" and is_binary(login) and login != "" ->
+        {:ok, %{provider: String.downcase(String.trim(provider)), login: login}}
+
+      is_binary(github_login) and github_login != "" ->
+        {:ok, %{provider: "github", login: github_login}}
+
+      true ->
+        Owl.IO.puts([
+          Owl.Data.tag("✗ ", :red),
+          "Missing member identity. Use --provider <provider> --login <login> or legacy --github-login <login>"
+        ])
+
+        {:error, :missing_option}
     end
   end
 
@@ -279,6 +306,7 @@ defmodule EnvsyncCli.Commands.Admin do
 
     Admin commands:
       envsync admin members list --project <name>
+      envsync admin members add --project <name> --provider <provider> --login <login> [--role member|admin]
       envsync admin members add --project <name> --github-login <login> [--role member|admin]
       envsync admin members role --project <name> --member-id <id> --role <member|admin>
       envsync admin members remove --project <name> --member-id <id>
