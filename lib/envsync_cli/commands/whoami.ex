@@ -6,8 +6,12 @@ defmodule EnvsyncCli.Commands.Whoami do
          {:ok, body} <- Http.get("/api/whoami") do
       Owl.IO.puts([
         "\n",
-        Owl.Data.tag("  GitHub login:  ", :light_green),
-        "#{body["github_login"]}\n",
+        Owl.Data.tag("  Provider:      ", :light_green),
+        "#{body["auth_provider"] || "github"}\n",
+        Owl.Data.tag("  Login:         ", :light_green),
+        "#{body["provider_login"] || body["github_login"] || "(unknown)"}\n",
+        Owl.Data.tag("  User ID:       ", :light_green),
+        "#{body["provider_user_id"] || body["github_id"] || "(unknown)"}\n",
         Owl.Data.tag("  Email:         ", :light_green),
         "#{body["email"] || "(none)"}\n",
         Owl.Data.tag("  Active:        ", :light_green),

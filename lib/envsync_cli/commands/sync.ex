@@ -18,8 +18,11 @@ defmodule EnvsyncCli.Commands.Sync do
     with {:ok, template_keys} <- EnvFile.read_template(template_path),
          :ok <- ensure_non_empty_template(template_keys),
          {:ok, local_env} <- read_local_env(env_path),
-         {:ok, local_repo} <- resolve_local_repo(),
-         :ok <- sync_once(project, local_repo, template_keys, local_env, env_path, retry?: true) do
+         {:ok, local_repo_binding} <- resolve_local_repo(),
+         :ok <-
+           sync_once(project, local_repo_binding, template_keys, local_env, env_path,
+             retry?: true
+           ) do
       :ok
     else
       {:error, :template_not_found} ->
@@ -46,13 +49,13 @@ defmodule EnvsyncCli.Commands.Sync do
       {:error, :git_remote_not_found} ->
         Owl.IO.puts([
           Owl.Data.tag("✗ ", :red),
-          "Could not resolve `origin` remote. Run sync inside a GitHub repo with origin configured."
+          "Could not resolve `origin` remote. Run sync inside a Git repo with origin configured."
         ])
 
       {:error, :invalid_repo} ->
         Owl.IO.puts([
           Owl.Data.tag("✗ ", :red),
-          "Could not derive a valid GitHub owner/repo from local git remote."
+          "Could not derive a valid provider/host/repo binding from local git remote."
         ])
 
       {:error, {:partial_publish_forbidden, pushed_count}} ->
@@ -87,16 +90,16 @@ defmodule EnvsyncCli.Commands.Sync do
   end
 
   defp resolve_local_repo do
-    RepoIdentity.resolve_local_repo()
+    RepoIdentity.resolve_local_repo_binding()
   end
 
-  defp sync_once(project, local_repo, template_keys, local_env, env_path, retry?: retry?) do
+  defp sync_once(project, local_repo_binding, template_keys, local_env, env_path, retry?: retry?) do
     force_pull? = should_force_pull?(template_keys, local_env)
 
     with {:ok, _} <- Auth.ensure_authenticated(),
          {:ok, publish_result} <-
-           maybe_publish_local_env(project, local_repo, template_keys, local_env),
-         {:ok, body} <- fetch_secrets(project, local_repo, template_keys, force_pull?),
+           maybe_publish_local_env(project, local_repo_binding, template_keys, local_env),
+         {:ok, body} <- fetch_secrets(project, local_repo_binding, template_keys, force_pull?),
          {:ok, merge_result} <- apply_sync_payload(body, env_path),
          :ok <- persist_project_version(project, body["server_version"]) do
       print_sync_result(publish_result, merge_result, body["missing"] || [], body, env_path)
@@ -108,7 +111,9 @@ defmodule EnvsyncCli.Commands.Sync do
         ])
 
         with {:ok, _token} <- Auth.login() do
-          sync_once(project, local_repo, template_keys, local_env, env_path, retry?: false)
+          sync_once(project, local_repo_binding, template_keys, local_env, env_path,
+            retry?: false
+          )
         end
 
       {:error, :unauthorized} ->
@@ -116,7 +121,12 @@ defmodule EnvsyncCli.Commands.Sync do
         {:error, :unauthorized}
 
       {:error, {:repo_mismatch, body}} ->
-        expected = body["expected_repo"] || "unknown"
+        expected =
+          format_binding(
+            body["expected_repo_provider"],
+            body["expected_repo_host"],
+            body["expected_repo_full_name"]
+          ) || body["expected_repo"] || "unknown"
 
         Owl.IO.puts([
           Owl.Data.tag("✗ ", :red),
@@ -148,18 +158,22 @@ defmodule EnvsyncCli.Commands.Sync do
   end
 
   @doc false
-  def build_sync_payload(project, local_repo, requested_keys, opts) do
+  def build_sync_payload(project, local_repo_binding, requested_keys, opts) do
     include_client_version? = Keyword.get(opts, :include_client_version?, true)
 
     client_version =
       if include_client_version?, do: ProjectState.get_version(project), else: :skip
 
-    base_payload = %{
-      project: project,
-      repo: local_repo,
-      requested_keys: requested_keys,
-      cli_version: Config.cli_version()
-    }
+    base_payload =
+      %{
+        project: project,
+        repo_provider: local_repo_binding.provider,
+        repo_host: local_repo_binding.host,
+        repo_full_name: local_repo_binding.full_name,
+        requested_keys: requested_keys,
+        cli_version: Config.cli_version()
+      }
+      |> maybe_put_legacy_repo(local_repo_binding)
 
     case client_version do
       {:ok, version} -> Map.put(base_payload, :client_version, version)
@@ -167,9 +181,9 @@ defmodule EnvsyncCli.Commands.Sync do
     end
   end
 
-  defp fetch_secrets(project, local_repo, requested_keys, force_pull?) do
+  defp fetch_secrets(project, local_repo_binding, requested_keys, force_pull?) do
     payload =
-      build_sync_payload(project, local_repo, requested_keys,
+      build_sync_payload(project, local_repo_binding, requested_keys,
         include_client_version?: not force_pull?
       )
 
@@ -185,21 +199,23 @@ defmodule EnvsyncCli.Commands.Sync do
     Http.post("/api/sync", payload)
   end
 
-  defp fetch_backend_snapshot(project, local_repo, requested_keys) do
+  defp fetch_backend_snapshot(project, local_repo_binding, requested_keys) do
     payload =
-      build_sync_payload(project, local_repo, requested_keys, include_client_version?: false)
+      build_sync_payload(project, local_repo_binding, requested_keys,
+        include_client_version?: false
+      )
 
     Http.post("/api/sync", payload)
   end
 
-  defp maybe_publish_local_env(project, local_repo, template_keys, local_env) do
+  defp maybe_publish_local_env(project, local_repo_binding, template_keys, local_env) do
     local_template_values = extract_local_template_values(local_env, template_keys)
     local_count = map_size(local_template_values)
 
     if local_count == 0 do
       {:ok, %{local_keys: 0, changed_keys: 0, pushed_keys: 0, skipped_forbidden: false}}
     else
-      with {:ok, snapshot} <- fetch_backend_snapshot(project, local_repo, template_keys) do
+      with {:ok, snapshot} <- fetch_backend_snapshot(project, local_repo_binding, template_keys) do
         backend_secrets = snapshot["secrets"] || %{}
         changed_values = changed_local_values(local_template_values, backend_secrets)
         changed_count = map_size(changed_values)
@@ -404,6 +420,18 @@ defmodule EnvsyncCli.Commands.Sync do
 
   defp maybe_version_suffix(nil), do: ""
   defp maybe_version_suffix(version), do: " (server version #{version})"
+
+  defp maybe_put_legacy_repo(payload, %{provider: "github", full_name: full_name}) do
+    Map.put(payload, :repo, full_name)
+  end
+
+  defp maybe_put_legacy_repo(payload, _binding), do: payload
+
+  defp format_binding(provider, host, full_name)
+       when is_binary(provider) and is_binary(host) and is_binary(full_name),
+       do: "#{provider}://#{host}/#{full_name}"
+
+  defp format_binding(_provider, _host, _full_name), do: nil
 
   defp uri(value), do: URI.encode(to_string(value))
 end
