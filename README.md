@@ -63,17 +63,18 @@ Logout clears both auth token and local project sync version state.
 
 | Command | Description |
 |---|---|
-| `envsync auth login` | Authenticate with GitHub |
+| `envsync auth login [--provider github\|bitbucket]` | Authenticate with GitHub or Bitbucket |
 | `envsync auth logout` | Clear local session token + sync state |
 | `envsync whoami` | Show authenticated identity |
 | `envsync projects` | List accessible projects |
-| `envsync projects create --name <name> --repo <owner/repo> [--description <text>]` | Create project and bind verified GitHub repo |
+| `envsync projects create --name <name> --repo <repo-ref> [--provider github\|bitbucket] [--description <text>]` | Create project and bind verified repo |
 | `envsync projects reverify --project <name>` | Re-verify project repo binding (admin) |
 | `envsync check` | Compare `.env.example` vs `.env` |
 | `envsync sync --project <name>` | Publish local `.env` changes if admin, then sync from backend |
 | `envsync watch --project <name> [--interval N]` | Poll backend and auto-sync repeatedly |
 | `envsync admin members list --project <name>` | List project members (admin) |
-| `envsync admin members add --project <name> --github-login <login> [--role member\|admin]` | Assign member (admin) |
+| `envsync admin members add --project <name> --provider <provider> --login <login> [--role member\|admin]` | Assign member (admin) |
+| `envsync admin members add --project <name> --github-login <login> [--role member\|admin]` | Legacy GitHub alias for member assignment |
 | `envsync admin members role --project <name> --member-id <id> --role <member\|admin>` | Update member role (admin) |
 | `envsync admin members remove --project <name> --member-id <id>` | Remove member (admin) |
 | `envsync admin sync-status --project <name>` | Show member freshness/staleness (admin) |
@@ -94,13 +95,14 @@ envsync sync --project my_app
 Project onboarding:
 
 ```bash
-envsync projects create --name my_app --repo myorg/my_app
+envsync projects create --name my_app --repo myorg/my_app --provider github
 envsync projects reverify --project my_app
 ```
 
-Project create/reverify is strictly verified by backend GitHub API checks.
-Backend must run with `ENVSYNC_GITHUB_VERIFY_TOKEN` configured.
-Accepted repo formats: `owner/repo`, `https://github.com/owner/repo(.git)`, `git@github.com:owner/repo.git`.
+Project create/reverify is strictly verified by backend provider checks.
+GitHub verification uses `ENVSYNC_GITHUB_VERIFY_TOKEN`.
+Bitbucket verification uses configured host profiles/tokens (`ENVSYNC_BITBUCKET_HOSTS_JSON` + host token env vars).
+Accepted repo formats include GitHub, Bitbucket Cloud, and self-hosted Bitbucket SCM URLs.
 
 Admin workflow (bulk publish):
 
